@@ -57,6 +57,11 @@ module Shoulda # :nodoc:
           self
         end
 
+        def allow_nil
+          @options[:allow_nil] = true
+          self
+        end
+
         def description
           result = "require "
           result << "case sensitive " unless @options[:case_insensitive]
@@ -70,22 +75,42 @@ module Shoulda # :nodoc:
           @expected_message ||= :taken
           set_scoped_attributes &&
             validate_attribute? &&
-            validate_after_scope_change?
+            validate_after_scope_change? &&
+            allows_nil?
         end
 
         private
 
-        def existing
-          @existing ||= first_instance
+        def allows_nil?
+          if @options[:allow_nil]
+            ensure_nil_record_in_database
+            allows_value_of(nil, @expected_message)
+          else
+            true
+          end
+        end
+
+        def existing_record
+          @existing_record ||= first_instance
         end
 
         def first_instance
-          @subject.class.first || create_instance_in_database
+          @subject.class.first || create_record_in_database
         end
 
-        def create_instance_in_database
+        def ensure_nil_record_in_database
+          unless existing_record_is_nil?
+            create_record_in_database(nil)
+          end
+        end
+
+        def existing_record_is_nil?
+          @existing_record.present? && existing_value.nil?
+        end
+
+        def create_record_in_database(value = "arbitrary_string")
           @subject.class.new.tap do |instance|
-            instance.send("#{@attribute}=", "arbitrary_string")
+            instance.send("#{@attribute}=", value)
             instance.save(:validate => false)
           end
         end
@@ -95,9 +120,10 @@ module Shoulda # :nodoc:
             @options[:scopes].all? do |scope|
               setter = :"#{scope}="
               if @subject.respond_to?(setter)
-                @subject.send(setter, existing.send(scope))
+                @subject.send(setter, existing_record.send(scope))
                 true
               else
+
                 @failure_message = "#{class_name} doesn't seem to have a #{scope} attribute."
                 false
               end
@@ -108,7 +134,15 @@ module Shoulda # :nodoc:
         end
 
         def validate_attribute?
+          if @options[:allow_nil] && existing_value.nil?
+            create_record_without_nil
+          end
+
           disallows_value_of(existing_value, @expected_message)
+        end
+
+        def create_record_without_nil
+          @existing_record = create_record_in_database
         end
 
         # TODO:  There is a chance that we could change the scoped field
@@ -119,7 +153,7 @@ module Shoulda # :nodoc:
             true
           else
             @options[:scopes].all? do |scope|
-              previous_value = existing.send(scope)
+              previous_value = existing_record.send(scope)
 
               # Assume the scope is a foreign key if the field is nil
               previous_value ||= correct_type_for_column(@subject.class.columns_hash[scope.to_s])
@@ -159,7 +193,7 @@ module Shoulda # :nodoc:
         end
 
         def existing_value
-          value = existing.send(@attribute)
+          value = existing_record.send(@attribute)
           if @options[:case_insensitive] && value.respond_to?(:swapcase!)
             value.swapcase!
           end
